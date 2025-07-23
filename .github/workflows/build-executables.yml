@@ -1,0 +1,146 @@
+name: Build Cross-Platform Executables
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: CSV_Formatter.exe
+            asset_name: CSV_Formatter-Windows.exe
+          - os: macos-latest
+            artifact_name: CSV_Formatter
+            asset_name: CSV_Formatter-macOS
+          - os: ubuntu-latest
+            artifact_name: CSV_Formatter
+            asset_name: CSV_Formatter-Linux
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Install system dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3-tk
+
+    - name: Build executable (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        pyinstaller --onefile --windowed --name=CSV_Formatter csv_formatter_gui.py
+
+    - name: Build executable (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        pyinstaller --onefile --windowed --name=CSV_Formatter csv_formatter_gui.py
+
+    - name: Build executable (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        pyinstaller --onefile --name=CSV_Formatter csv_formatter_gui.py
+
+    - name: Test executable (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        if (Test-Path "dist/CSV_Formatter.exe") {
+          Write-Host "✅ Executable created successfully"
+          Get-ChildItem dist/
+        } else {
+          Write-Host "❌ Executable not found"
+          exit 1
+        }
+
+    - name: Test executable (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        if [ -f "dist/CSV_Formatter" ]; then
+          echo "✅ Executable created successfully"
+          ls -la dist/
+          file dist/CSV_Formatter
+        else
+          echo "❌ Executable not found"
+          exit 1
+        fi
+
+    - name: Upload executable
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.asset_name }}
+        path: dist/${{ matrix.artifact_name }}
+
+    - name: Create distribution package
+      run: |
+        mkdir -p package
+        cp dist/${{ matrix.artifact_name }} package/
+        cp README_EXECUTABLE.md package/
+        cp requirements.txt package/
+
+    - name: Upload distribution package
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.asset_name }}-package
+        path: package/
+
+  create-release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          CSV_Formatter-Windows-package/*
+          CSV_Formatter-macOS-package/*
+          CSV_Formatter-Linux-package/*
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-builds:
+    name: Test Builds
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      
+    - name: List all builds
+      run: |
+        echo "📦 Available builds:"
+        find . -name "CSV_Formatter*" -type f | sort
+        echo ""
+        echo "📊 Build sizes:"
+        find . -name "CSV_Formatter*" -type f -exec ls -lh {} \; 
